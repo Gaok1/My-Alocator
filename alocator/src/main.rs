@@ -19,6 +19,7 @@ pub struct AlphaAlocator {
     free: AtomicUsize,
     used_slots: Mutex<[Slot; 3072]>,
     next_offset: AtomicUsize,
+    historic : Mutex<[Option<u32>; 3072]>, //armazena pedidos de alocação
 }
 
 impl AlphaAlocator {
@@ -42,21 +43,43 @@ impl AlphaAlocator {
             None
         }
     }
+
+    pub fn print_historic(&self) {
+        println!("\n\n Historic of allocations\n\n");
+        let guard = self.historic.lock().unwrap();
+        for i in 0..3072 {
+            if let Some(value) = guard[i] {
+                println!("Slot {} foi alocado para {} bytes", i, value);
+            }
+        }
+    }
+
+    pub fn reg_historic(&self, size: usize) {
+        for i in 0..self.size {
+            let mut guard = self.historic.lock().unwrap();
+            if guard[i].is_none() {
+                guard[i] = Some(size as u32);
+                break;
+            }
+        }
+    }
+
 }
 
 unsafe impl GlobalAlloc for AlphaAlocator {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        self.reg_historic(layout.size());
         self.times_called.fetch_add(1, Ordering::SeqCst);
         let size = layout.size();
         if size > self.free.load(Ordering::Relaxed) {
+            self.print_historic();
             panic!("Out of memory");
-            return std::ptr::null_mut();
         }
         let old_offset = self.next_offset.fetch_add(size, Ordering::SeqCst);
         if old_offset + size > self.size {
             self.next_offset.fetch_sub(size, Ordering::SeqCst);
+            self.print_historic();
             panic!("Out of memory");
-            return std::ptr::null_mut();
         }
         self.free.fetch_sub(size, Ordering::SeqCst);
         if let Some(_slot) = self.alocate_slot(old_offset, size) {
@@ -86,21 +109,22 @@ static A: AlphaAlocator = AlphaAlocator {
     free: AtomicUsize::new(3072),
     used_slots: Mutex::new([Slot { size: 0, index: 0 }; 3072]),
     next_offset: AtomicUsize::new(0),
+    historic: Mutex::new([None; 3072]),
 };
 
 fn main() {
     println!("Hello, world!");
     let pointer = Box::new(10);
-    println!("Box pointer = {:?}", pointer);
-    let mut v = Vec::new();
-    for i in 0..400 {
-        v.push(i);
-    }
-    println!("v = {:?}", v);
+    //println!("Box pointer = {:?}", pointer);
+    // let mut v = Vec::new();
+    // for i in 0..400 {
+    //     v.push(i);
+    // }
+    //println!("v = {:?}", v);
     println!("Done");
     println!(
         "Alocador foi chamado {} vezes",
         A.times_called.load(Ordering::SeqCst)
     );
-
+    A.print_historic();
 }
